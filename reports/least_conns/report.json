@@ -1,0 +1,46 @@
+{
+  "retries_histogram": {
+    "0": 3062
+  },
+  "per_target_concurrency_percentiles": {
+    "p100": 4.0,
+    "p99": 3.0,
+    "p90": 3.0,
+    "p80": 2.0,
+    "p50": 2.0
+  },
+  "per_target_cpu_util_percentiles": {
+    "p100": 0.46655431355997523,
+    "p99": 0.3575467453045099,
+    "p90": 0.2719395348500296,
+    "p80": 0.22668661320554498,
+    "p50": 0.17364430418587812
+  },
+  "fleet_size_percentiles": {
+    "p100": 4.0,
+    "p99": 4.0,
+    "p90": 4.0,
+    "p80": 4.0,
+    "p50": 4.0
+  },
+  "request_duration_percentiles_ms": {
+    "p100": 590.0,
+    "p99": 315.3899999999999,
+    "p90": 190.0,
+    "p80": 152.0,
+    "p50": 100.0
+  },
+  "request_latency_percentiles_ms": {
+    "p100": 590.0,
+    "p99": 315.3899999999999,
+    "p90": 190.0,
+    "p80": 152.0,
+    "p50": 100.0
+  },
+  "samples": {
+    "num_decision_events": 3062,
+    "num_fleet_samples": 3062,
+    "num_target_concurrency_samples": 12248,
+    "num_target_cpu_util_samples": 12248
+  }
+}

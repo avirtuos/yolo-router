@@ -1,6 +1,9 @@
-"yolo-router" is a simulation of two load balancing system architectures. The first architecture is a basic round-robin system and the second is a more sophisticated least-conns style balancing technique. The simulation should allow you to choose which architecture you want to simulate as well as any configuration thats supported by that simulated architecture. At the end of the simulation run, we should generate a report on key metrics relevant to the simulation. Below we define the detailed requirements for each of the components and actors in this system.
+"yolo-router" is a python simulation of two load balancing system architectures. The first architecture is a basic round-robin system and the second is a more sophisticated least-conns style balancing technique. The simulation should allow you to choose which architecture you want to simulate as well as any configuration thats supported by that simulated architecture. At the end of the simulation run, we should generate a report on key metrics relevant to the simulation. Below we define the detailed requirements for each of the components and actors in this system.
 
 Suggested libraries to build with:
+- SimPy - discrete event simulation framework that also supports the concept of simulated time.
+- SciPy - for stats and generating distributions of arrival rate date.
+- NumPy - for stats and generating distributions of arrival rate date.
 
 ## Simulation Environment
 
@@ -9,6 +12,7 @@ All load balancing architecture that we will simulate will have:
 - A configurable number of "hosts" will be part of the load balancer so architectures that rely on only local host state may perform differently than architectures that intentionally coordinate across hosts. For example, an architecture may use a HashMap that is accessible to all load balancer hosts as a way to simulate a shared data store that allows for coordinated action.
 - A configurable number of target hosts that the load balancing hosts send the requests to after making their load balancing decision.
 - Access to a scaling service that offers 2 APIs. The first API is used to scale up the target fleet by adding a new target host. The second API is used to scale down the target fleet by removing a target host. These APIs take a "Scaling Delay" parameter that represents the amount of simulated time that it takes for the target host to be added or removed. This service isn't a real service, it too is a simulation.
+- json config file that can be used to supply values for all the configurable parameters supported by the various features of this simulation
 
 ### Targets 
 

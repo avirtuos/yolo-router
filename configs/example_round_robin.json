@@ -1,0 +1,53 @@
+{
+  "simulation": {
+    "seed": 123,
+    "duration_ms": 60000,
+    "drain_ms": 5000
+  },
+  "traffic": {
+    "arrival": {
+      "distribution": "poisson",
+      "rate_per_sec": 50.0
+    },
+    "request_duration_ms": {
+      "mode": "distribution",
+      "distribution": "lognormal",
+      "mean_ms": 100.0,
+      "sigma": 0.5
+    },
+    "cpu_demand": {
+      "mode": "distribution",
+      "distribution": "normal",
+      "mean": 10.0,
+      "stddev": 2.0
+    }
+  },
+  "load_balancer": {
+    "architecture": "round_robin",
+    "hosts": 3,
+    "rr": {
+      "retry_limit": 2,
+      "sync_delay_ms": 100,
+      "idle_scale_down_threshold_requests_5m": 2
+    }
+  },
+  "targets": {
+    "initial_count": 4,
+    "max_concurrency_per_target": 8,
+    "cpu_capacity_per_target": 100.0
+  },
+  "scaling": {
+    "min_targets": 1,
+    "max_targets": 50,
+    "scale_up_delay_ms": 200,
+    "scale_down_delay_ms": 300
+  },
+  "sampling": {
+    "mode": "event",
+    "sample_on": ["lb_decision"]
+  },
+  "reporting": {
+    "output_dir": "reports/round_robin",
+    "writers": ["json", "markdown"]
+  }
+}
