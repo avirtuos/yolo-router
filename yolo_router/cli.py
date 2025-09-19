@@ -534,6 +534,7 @@ class RoundRobinLBHost(LBHostBase):
         super().__init__(env, host_id, topology, scaler, metrics, config)
         rr_cfg = config.get("load_balancer", {}).get("rr", {})
         self.retry_limit: int = int(rr_cfg.get("retry_limit", 2))
+        self.retry_delay_ms: int = int(rr_cfg.get("retry_delay_ms", 0))
         self.sync_delay_ms: int = int(rr_cfg.get("sync_delay_ms", 100))
         self.idle_threshold_requests_5m: int = int(rr_cfg.get("idle_scale_down_threshold_requests_5m", 1))
         # Local copy of target IDs and round-robin index
@@ -586,6 +587,9 @@ class RoundRobinLBHost(LBHostBase):
                 self.snapshot("reject", req, chosen_target_id=None)
                 attempts += 1
                 req.retries_attempted = attempts
+                # Apply configured retry delay penalty (simulated time)
+                if getattr(self, "retry_delay_ms", 0):
+                    yield self.env.timeout(int(self.retry_delay_ms))
                 continue
 
             target = self.topology.get_target(tid)
@@ -598,6 +602,9 @@ class RoundRobinLBHost(LBHostBase):
                 self.snapshot("reject", req, chosen_target_id=None)
                 attempts += 1
                 req.retries_attempted = attempts
+                # Apply configured retry delay penalty (simulated time)
+                if getattr(self, "retry_delay_ms", 0):
+                    yield self.env.timeout(int(self.retry_delay_ms))
 
         # Exhausted retries: scale up and route to new target
         created_ids = yield self.scaler.scale_up(count=1, initiator_host_id=self.host_id)
@@ -691,6 +698,7 @@ class LeastConnsLBHost(LBHostBase):
         super().__init__(env, host_id, topology, scaler, metrics, config)
         lc_cfg = config.get("load_balancer", {}).get("lc", {})
         self.lock_latency_ms: int = int(lc_cfg.get("shared_map_lock_latency_ms", 0))
+        self.retry_delay_ms: int = int(lc_cfg.get("retry_delay_ms", 0))
         self.idle_threshold_outstanding_5m: int = int(lc_cfg.get("idle_scale_down_threshold_outstanding_5m", 1))
         self.shared = shared_state
         # Start scale-down scanning
@@ -728,6 +736,9 @@ class LeastConnsLBHost(LBHostBase):
                 # Should be rare: target rejected despite reservation (race). Treat as reject and retry via scale up.
                 req.retries_attempted += 1
                 self.snapshot("reject", req, chosen_target_id=None)
+                # Apply configured retry delay penalty (simulated time)
+                if getattr(self, "retry_delay_ms", 0):
+                    yield self.env.timeout(int(self.retry_delay_ms))
                 # Undo the optimistic reservation since accept failed
                 with self.shared.lock.request() as lk3:
                     yield lk3
@@ -1126,6 +1137,7 @@ DEFAULT_CONFIG = {
         "hosts": 2,
         "rr": {
             "retry_limit": 2,
+            "retry_delay_ms": 0,
             "sync_delay_ms": 100,
             "idle_scale_down_threshold_requests_5m": 2,
         },

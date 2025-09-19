@@ -36,6 +36,7 @@
     "rr": {
       "retry_limit": 2,
       "sync_delay_ms": 100,
+      "retry_delay_ms": 10,
       "idle_scale_down_threshold_requests_5m": 2
     }
   },
