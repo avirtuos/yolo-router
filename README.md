@@ -1,7 +1,7 @@
 # yolo-router
 
 A discrete-event simulation (SimPy) that was written entirely using spec driven development with OpenAI GPT5 + Cline in VSCode. For details on the design spec and prompts used
-see design.md. The total cost for generating this simulation was $6.52 using a combination of combination of GPT-5 for planning and GPT-5-mini for acting.
+see design.md. The total cost for generating this simulation was $7.52 using a combination of combination of GPT-5 for planning and GPT-5-mini for acting.
 
 The simulation presents supports supports two load-balancing architectures and their scaling behaviors under configurable traffic:
 
@@ -10,6 +10,23 @@ The simulation presents supports supports two load-balancing architectures and t
 
 The simulation uses simulated time only (SimPy `env.now`/`env.timeout`), never wall-clock time. Metrics are captured in an event-driven way at every load balancing decision.
 
+## Reports
+
+Each run of the simulation will generate a markdown, json, and HTML report. [Here is an example of the HTML report (saved as PDF)](docs/sample_reports/round_robin_report.pdf). You can also see some of the graphs below. They are normally interactive (javascript) graphs when loading the HTML report.
+
+The rates over time graph show how the request rate, retry rate, and reject (no capacity) rates vary over time in relation to each other.
+![Alt text](docs/images/rates_over_time.png)
+
+The "Available At Reject" graph shows the distribution of how many targets had one ore more free request slots at the time when a request was rejected due to (a) too many retries and (b) inability to add more capacity. This is a great measure of load balancing efficiency.
+![Alt text](docs/images/available_at_reject.png)
+
+The "Latency Over Time" graph shows how latency in the system changed over the course of the simulation.
+![Alt text](docs/images/latency_over_time.png)
+
+The "Service Overhead Over Time" graph shows how much latency is being added by retries, scaling, etc.
+![Alt text](docs/images/service_overhead.png)
+
+ 
 ## Quickstart
 
 1) Create a virtual environment and install dependencies:

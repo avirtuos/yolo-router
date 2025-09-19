@@ -65,6 +65,8 @@ class Request:
     duration_ms: int
     cpu_demand: float
     retries_attempted: int = 0
+    # Accumulated per-request service overhead (ms). Incremented when retries/waits/scale-ups occur.
+    service_overhead_ms: int = 0
     start_service_time_ms: Optional[int] = None
     end_time_ms: Optional[int] = None
     chosen_target_id: Optional[int] = None
@@ -120,6 +122,16 @@ class MetricsCollector:
         self.arrival_times_ms: List[int] = []
         self.latency_times_ms: List[int] = []
         self.latency_values_ms: List[float] = []
+        # Service duration time-series (completion times -> service durations)
+        self.service_duration_times_ms: List[int] = []
+        self.service_duration_values_ms: List[float] = []
+        # Service overhead time-series (completion times -> overhead = latency - service_duration)
+        # captures waits/retries/scaling delays outside of actual service time.
+        self.service_overhead_times_ms: List[int] = []
+        self.service_overhead_values_ms: List[float] = []
+        # Free slots time-series (sampled on each LB decision): sum of (max_concurrency - current_concurrency) across targets
+        self.free_slots_times_ms: List[int] = []
+        self.free_slots_values_ms: List[float] = []
         # For diagnostics: when a request is rejected, how many other targets had available capacity?
         self.available_on_reject_counts: List[int] = []
 
@@ -137,6 +149,15 @@ class MetricsCollector:
         if req.end_time_ms is not None and req.latency_ms is not None:
             self.latency_times_ms.append(int(req.end_time_ms))
             self.latency_values_ms.append(float(req.latency_ms))
+        # Service duration time series (for duration-over-time chart)
+        if req.end_time_ms is not None and req.service_duration_ms is not None:
+            self.service_duration_times_ms.append(int(req.end_time_ms))
+            self.service_duration_values_ms.append(float(req.service_duration_ms))
+        # Service overhead time series (accumulated while request waited on LB: retries, scale waits)
+        if req.end_time_ms is not None:
+            overhead = float(getattr(req, "service_overhead_ms", 0.0))
+            self.service_overhead_times_ms.append(int(req.end_time_ms))
+            self.service_overhead_values_ms.append(overhead)
         # Per-target request metrics
         if req.chosen_target_id is not None:
             series = self.per_target[req.chosen_target_id]
@@ -175,6 +196,14 @@ class MetricsCollector:
 
         self.per_target_concurrency_samples.extend(conc_vals)
         self.per_target_cpu_util_samples.extend(cpu_vals)
+
+        # Sample free slots at this decision time: sum of free request slots across all targets
+        try:
+            free_slots = int(sum(max(0, tgt.max_concurrency - getattr(tgt, "current_concurrency", 0)) for tgt in targets))
+        except Exception:
+            free_slots = 0
+        self.free_slots_times_ms.append(int(t))
+        self.free_slots_values_ms.append(float(free_slots))
 
         event = {
             "t_ms": t,
@@ -581,7 +610,12 @@ class RoundRobinLBHost(LBHostBase):
             tid = self._next_target_id()
             if tid is None:
                 # No targets; must scale up
+                t_before_scale = int(self.env.now)
                 created_ids = yield self.scaler.scale_up(count=1, initiator_host_id=self.host_id)
+                t_after_scale = int(self.env.now)
+                # record simulated wait as service overhead on the in-flight request
+                if hasattr(req, "service_overhead_ms"):
+                    req.service_overhead_ms += (t_after_scale - t_before_scale)
                 # Immediate local knowledge (initiator sees it instantly)
                 yield self.env.timeout(0)
                 # Update local view immediately
@@ -599,7 +633,11 @@ class RoundRobinLBHost(LBHostBase):
                 req.retries_attempted = attempts
                 # Apply configured retry delay penalty (simulated time)
                 if getattr(self, "retry_delay_ms", 0):
+                    t_before_retry_wait = int(self.env.now)
                     yield self.env.timeout(int(self.retry_delay_ms))
+                    t_after_retry_wait = int(self.env.now)
+                    if hasattr(req, "service_overhead_ms"):
+                        req.service_overhead_ms += (t_after_retry_wait - t_before_retry_wait)
                 continue
 
             target = self.topology.get_target(tid)
@@ -614,10 +652,18 @@ class RoundRobinLBHost(LBHostBase):
                 req.retries_attempted = attempts
                 # Apply configured retry delay penalty (simulated time)
                 if getattr(self, "retry_delay_ms", 0):
+                    t_before_retry_wait2 = int(self.env.now)
                     yield self.env.timeout(int(self.retry_delay_ms))
+                    t_after_retry_wait2 = int(self.env.now)
+                    if hasattr(req, "service_overhead_ms"):
+                        req.service_overhead_ms += (t_after_retry_wait2 - t_before_retry_wait2)
 
         # Exhausted retries: scale up and route to new target
+        t_before_scale2 = int(self.env.now)
         created_ids = yield self.scaler.scale_up(count=1, initiator_host_id=self.host_id)
+        t_after_scale2 = int(self.env.now)
+        if hasattr(req, "service_overhead_ms"):
+            req.service_overhead_ms += (t_after_scale2 - t_before_scale2)
         yield self.env.timeout(0)
         self._local_target_ids = self.topology.list_target_ids()
         if created_ids:
@@ -748,7 +794,11 @@ class LeastConnsLBHost(LBHostBase):
                 self.snapshot("reject", req, chosen_target_id=None)
                 # Apply configured retry delay penalty (simulated time)
                 if getattr(self, "retry_delay_ms", 0):
+                    t_before_retry_wait_lc = int(self.env.now)
                     yield self.env.timeout(int(self.retry_delay_ms))
+                    t_after_retry_wait_lc = int(self.env.now)
+                    if hasattr(req, "service_overhead_ms"):
+                        req.service_overhead_ms += (t_after_retry_wait_lc - t_before_retry_wait_lc)
                 # Undo the optimistic reservation since accept failed
                 with self.shared.lock.request() as lk3:
                     yield lk3
@@ -757,7 +807,11 @@ class LeastConnsLBHost(LBHostBase):
                     self.shared.outstanding[chosen.id] = max(0, self.shared.outstanding.get(chosen.id, 0) - 1)
 
         # No capacity across fleet: scale up and route
+        t_before_scale_lc = int(self.env.now)
         created_ids = yield self.scaler.scale_up(count=1, initiator_host_id=self.host_id)
+        t_after_scale_lc = int(self.env.now)
+        if hasattr(req, "service_overhead_ms"):
+            req.service_overhead_ms += (t_after_scale_lc - t_before_scale_lc)
         if created_ids:
             tid_new = created_ids[0]
             # Add to shared map with outstanding=1 and route
@@ -1289,23 +1343,40 @@ def _build_html_report(report: Dict[str, Any], metrics: "MetricsCollector", titl
         lat_values = lat_values[::step]
 
     # Compute trailing-window latency percentiles (p99, p99.9, p99.99, p90, p80) per time point
-    # Use time axis = rate_times if available, otherwise fall back to decision event times
-    time_points = rate_times if rate_times else times
+    # latency_window_ms and sd_window_ms define the trailing windows (ms)
+    latency_window_ms = 1_000  # trailing 1 second for latency percentiles
+    sd_window_ms = 1_000  # trailing 1 second for service-overhead percentiles
+    # Use time axis = rate_times only when its bucket resolution is fine enough for the percentile window.
+    # Otherwise fall back to decision event times which are higher-resolution.
+    time_points = rate_times if (rate_times and ('bucket_ms' in locals() and bucket_ms <= latency_window_ms)) else times
     p99_series = []
     p99_9_series = []
     p99_99_series = []
     p90_series = []
     p80_series = []
-    window_ms = 60_000  # trailing 1 minute
-    if time_points and lat_times_full and lat_values_full:
-        # Convert to arrays for faster selection if large
-        lt = np.array(lat_times_full, dtype=float)
-        lv = np.array(lat_values_full, dtype=float)
+    # Also compute equivalent trailing-window percentiles for service duration (service_duration_values_ms)
+    sd_p99_series = []
+    sd_p99_9_series = []
+    sd_p99_99_series = []
+    sd_p90_series = []
+    sd_p80_series = []
+
+    # Prepare full arrays for latency and service-overhead
+    if time_points:
+        lt = np.array(lat_times_full, dtype=float) if lat_times_full else np.array([], dtype=float)
+        lv = np.array(lat_values_full, dtype=float) if lat_values_full else np.array([], dtype=float)
+        # Use service-overhead series (latency - service_duration) for the overhead chart
+        sd_times_full = np.array(getattr(metrics, "service_overhead_times_ms", [])[:], dtype=float)
+        sd_vals_full = np.array(getattr(metrics, "service_overhead_values_ms", [])[:], dtype=float)
         for tp in time_points:
-            start = tp - window_ms
-            # select values with start < t <= tp
-            mask = (lt > start) & (lt <= tp)
-            vals = lv[mask]
+            start = tp - latency_window_ms
+            start_sd = tp - sd_window_ms
+            # select latency values in window (start < t <= tp)
+            if lt.size:
+                mask = (lt > start) & (lt <= tp)
+                vals = lv[mask]
+            else:
+                vals = np.array([], dtype=float)
             if vals.size:
                 p99_series.append(float(np.percentile(vals, 99)))
                 # numpy.percentile supports fractional quantiles; compute 99.9 and 99.99
@@ -1319,12 +1390,36 @@ def _build_html_report(report: Dict[str, Any], metrics: "MetricsCollector", titl
                 p99_99_series.append(None)
                 p90_series.append(None)
                 p80_series.append(None)
+
+            # select service-overhead values in trailing 1s window (start_sd < t <= tp)
+            if sd_times_full.size:
+                sd_mask = (sd_times_full > start_sd) & (sd_times_full <= tp)
+                sd_vals = sd_vals_full[sd_mask]
+            else:
+                sd_vals = np.array([], dtype=float)
+            if sd_vals.size:
+                sd_p99_series.append(float(np.percentile(sd_vals, 99)))
+                sd_p99_9_series.append(float(np.percentile(sd_vals, 99.9)))
+                sd_p99_99_series.append(float(np.percentile(sd_vals, 99.99)))
+                sd_p90_series.append(float(np.percentile(sd_vals, 90)))
+                sd_p80_series.append(float(np.percentile(sd_vals, 80)))
+            else:
+                sd_p99_series.append(None)
+                sd_p99_9_series.append(None)
+                sd_p99_99_series.append(None)
+                sd_p90_series.append(None)
+                sd_p80_series.append(None)
     else:
         p99_series = []
         p99_9_series = []
         p99_99_series = []
         p90_series = []
         p80_series = []
+        sd_p99_series = []
+        sd_p99_9_series = []
+        sd_p99_99_series = []
+        sd_p90_series = []
+        sd_p80_series = []
 
     # Helper to render a dict as a simple HTML table (one header row, one value row)
     def dict_to_table_html(d: Dict[str, Any], title: Optional[str] = None) -> str:
@@ -1454,6 +1549,11 @@ table.table tbody tr:nth-child(even) {{ background-color: #fafafa; }}
 </div>
 
 <div class="section">
+  <h2>Free Slots Over Time</h2>
+  <div id="freeSlots" class="chart"></div>
+</div>
+
+<div class="section">
   <h2>Latency Distribution (samples)</h2>
   <div id="latency" class="chart"></div>
 </div>
@@ -1478,6 +1578,11 @@ table.table tbody tr:nth-child(even) {{ background-color: #fafafa; }}
   <div id="latencyOverTime" class="chart"></div>
 </div>
 
+<div class="section">
+  <h2>Service Duration Over Time</h2>
+  <div id="serviceDurationOverTime" class="chart"></div>
+</div>
+
 {numeric_tables_html}
 
 {per_target_tables_html}
@@ -1495,6 +1600,8 @@ const durations = {_json.dumps(durations)};
 const ptIds = {_json.dumps(pt_ids)};
 const ptTotals = {_json.dumps(pt_totals)};
 const availCounts = {_json.dumps(getattr(metrics, "available_on_reject_counts", []))};
+const freeSlotsTimes = {_json.dumps(getattr(metrics, "free_slots_times_ms", []))};
+const freeSlotsValues = {_json.dumps(getattr(metrics, "free_slots_values_ms", []))};
 
 const rateTimes = {_json.dumps(rate_times)};
 const rateRps = {_json.dumps(rate_rps)};
@@ -1518,6 +1625,15 @@ Plotly.newPlot('retries', [{{
 Plotly.newPlot('fleet', [{{
   x: times, y: fleet, type: 'scatter', mode: 'lines', line: {{color: '#264653'}}
 }}], {{title: 'Fleet Size Over Time', xaxis: {{title: 't (ms)'}}, yaxis: {{title: '# targets'}}}});
+
+Plotly.newPlot('freeSlots', [{{
+  x: freeSlotsTimes,
+  y: freeSlotsValues,
+  type: 'scatter',
+  mode: 'markers',
+  marker: {{ color: '#2a9d8f', size: 3, opacity: 0.6 }},
+  name: 'free slots (per decision)'
+}}], {{title: 'Free Slots Over Time (per-decision samples)', xaxis: {{title: 't (ms)'}}, yaxis: {{title: '# free slots'}}}});
 
 Plotly.newPlot('latency', [{{
   x: latencies, type: 'histogram', marker: {{color: '#e76f51'}}, nbinsx: 50
@@ -1585,15 +1701,34 @@ Plotly.newPlot('ratesCombined', [{{
   yaxis2: {{title: 'retries & rejects (count/sec)', overlaying: 'y', side: 'right'}}
 }});
 
-/* Latency chart remains unchanged below */
+/* Latency chart: trailing-window percentile lines only (per-request markers removed for performance) */
 Plotly.newPlot('latencyOverTime', [
-{{"x": latTimes, "y": latValues, "type": "scatter", "mode": "markers", "marker": {{ "color": "#8e44ad", "size": 3, "opacity": 0.5 }}, "name": "per-request latency"}} ,
-{{"x": rateTimes, "y": p99_99Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#7f0000", "width": 2 }}, "name": "p99.99 (trailing 1m)"}} ,
-{{"x": rateTimes, "y": p99_9Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#b30000", "width": 2 }}, "name": "p99.9 (trailing 1m)"}} ,
-{{"x": rateTimes, "y": p99Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#d00000", "width": 2 }}, "name": "p99 (trailing 1m)"}} ,
-{{"x": rateTimes, "y": p90Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#f77f00", "width": 2 }}, "name": "p90 (trailing 1m)"}} ,
-{{"x": rateTimes, "y": p80Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#f4a261", "width": 2 }}, "name": "p80 (trailing 1m)"}} 
-], {{title: 'Latency Over Time (per-request + trailing percentiles)', xaxis: {{title: 't (ms)'}}, yaxis: {{title: 'latency (ms)'}}}});
+{{"x": rateTimes, "y": p99_99Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#7f0000", "width": 2 }}, "name": "p99.99 (trailing 1s)"}} ,
+{{"x": rateTimes, "y": p99_9Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#b30000", "width": 2 }}, "name": "p99.9 (trailing 1s)"}} ,
+{{"x": rateTimes, "y": p99Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#d00000", "width": 2 }}, "name": "p99 (trailing 1s)"}} ,
+{{"x": rateTimes, "y": p90Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#f77f00", "width": 2 }}, "name": "p90 (trailing 1s)"}} ,
+{{"x": rateTimes, "y": p80Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#f4a261", "width": 2 }}, "name": "p80 (trailing 1s)"}}
+], {{title: 'Latency Over Time (trailing percentiles)', xaxis: {{title: 't (ms)'}}, yaxis: {{title: 'latency (ms)'}}}});
+
+/* Service overhead over time: trailing-window percentile lines (computed server-side into sd_* arrays).
+   Per-request scatter removed to avoid rendering performance issues. */
+const serviceOverheadTimes = {_json.dumps(getattr(metrics, "service_overhead_times_ms", []))};
+const serviceOverheadValues = {_json.dumps(getattr(metrics, "service_overhead_values_ms", []))};
+
+const sd_p99Series = {_json.dumps(sd_p99_series)};
+const sd_p99_9Series = {_json.dumps(sd_p99_9_series)};
+const sd_p99_99Series = {_json.dumps(sd_p99_99_series)};
+const sd_p90Series = {_json.dumps(sd_p90_series)};
+const sd_p80Series = {_json.dumps(sd_p80_series)};
+
+/* Render only percentile lines for service-overhead (no per-request markers) */
+Plotly.newPlot('serviceDurationOverTime', [
+{{"x": rateTimes, "y": sd_p99_99Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#023858", "width": 2 }}, "name": "p99.99 (trailing 1s)"}},
+{{"x": rateTimes, "y": sd_p99_9Series,  "type": "scatter", "mode": "lines", "line": {{ "color": "#045a8d", "width": 2 }}, "name": "p99.9 (trailing 1s)"}},
+{{"x": rateTimes, "y": sd_p99Series,    "type": "scatter", "mode": "lines", "line": {{ "color": "#2b8cbe", "width": 2 }}, "name": "p99 (trailing 1s)"}},
+{{"x": rateTimes, "y": sd_p90Series,    "type": "scatter", "mode": "lines", "line": {{ "color": "#7fbfff", "width": 2 }}, "name": "p90 (trailing 1s)"}},
+{{"x": rateTimes, "y": sd_p80Series,    "type": "scatter", "mode": "lines", "line": {{ "color": "#bfe3ff", "width": 2 }}, "name": "p80 (trailing 1s)"}}
+], {{ title: 'Service Overhead Over Time (trailing 1s percentiles)', xaxis: {{ title: 't (ms)' }}, yaxis: {{ title: 'service overhead (ms)' }} }});
 </script>
 </body>
 </html>
