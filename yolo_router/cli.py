@@ -120,6 +120,8 @@ class MetricsCollector:
         self.arrival_times_ms: List[int] = []
         self.latency_times_ms: List[int] = []
         self.latency_values_ms: List[float] = []
+        # For diagnostics: when a request is rejected, how many other targets had available capacity?
+        self.available_on_reject_counts: List[int] = []
 
     def record_request_arrival(self, t_ms: int) -> None:
         self.arrival_times_ms.append(int(t_ms))
@@ -188,6 +190,14 @@ class MetricsCollector:
         # Store only last event at this host/time
         self._last_event_by_host_time[key] = event
 
+        # Before storing the event, record how many other targets had capacity when a reject occurred
+        if outcome == "reject":
+            try:
+                avail = sum(1 for tgt in targets if tgt.can_accept())
+            except Exception:
+                # defensive fallback if targets is not iterable of Target instances
+                avail = 0
+            self.available_on_reject_counts.append(int(avail))
         # Also keep full list for traceability
         self.decision_events.append(event)
 
@@ -1484,6 +1494,7 @@ const durations = {_json.dumps(durations)};
 
 const ptIds = {_json.dumps(pt_ids)};
 const ptTotals = {_json.dumps(pt_totals)};
+const availCounts = {_json.dumps(getattr(metrics, "available_on_reject_counts", []))};
 
 const rateTimes = {_json.dumps(rate_times)};
 const rateRps = {_json.dumps(rate_rps)};
@@ -1516,9 +1527,11 @@ Plotly.newPlot('duration', [{{
   x: durations, type: 'histogram', marker: {{color: '#f4a261'}}, nbinsx: 50
 }}], {{title: 'Service Duration (ms)', xaxis: {{title: 'Duration (ms)'}}, yaxis: {{title: 'Count'}}}});
 
+/* Available-at-reject histogram: shows how many other targets had capacity when a request was rejected.
+   Ideal behavior: most rejections occur when availCounts == 0. This illustrates routing efficiency. */
 Plotly.newPlot('perTargetTotals', [{{
-  x: ptIds, y: ptTotals, type: 'bar', marker: {{color: '#457b9d'}}
-}}], {{title: 'Per-Target Total Requests', xaxis: {{title: 'Target ID'}}, yaxis: {{title: 'Total'}}}});
+  x: availCounts, type: 'histogram', marker: {{color: '#457b9d'}}, nbinsx: 50
+}}], {{title: 'Available Targets at Reject (histogram)', xaxis: {{title: '# other targets with available capacity'}}, yaxis: {{title: 'Count'}}}});
 
 /* Combined rates chart: retries/sec (bar), rejects/sec (bar), requests/sec (line) — all on the same Y axis */
 Plotly.newPlot('ratesCombined', [{{
