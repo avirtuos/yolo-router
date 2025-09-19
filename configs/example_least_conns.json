@@ -2,12 +2,21 @@
   "simulation": {
     "seed": 456,
     "duration_ms": 60000,
-    "drain_ms": 5000
+    "drain_ms": 5000,
+    "total_time_ms": 70000
   },
   "traffic": {
     "arrival": {
       "distribution": "poisson",
-      "rate_per_sec": 50.0
+      "rate_per_sec": 20.0,
+      "ramp": {
+        "mode": "steps",
+        "steps": [
+          { "t_ms": 0, "rate_per_sec": 20.0 },
+          { "t_ms": 20000, "rate_per_sec": 60.0 },
+          { "t_ms": 40000, "rate_per_sec": 120.0 }
+        ]
+      }
     },
     "request_duration_ms": {
       "mode": "distribution",
@@ -47,6 +56,6 @@
   },
   "reporting": {
     "output_dir": "reports/least_conns",
-    "writers": ["json", "markdown"]
+    "writers": ["json", "markdown", "html"]
   }
 }

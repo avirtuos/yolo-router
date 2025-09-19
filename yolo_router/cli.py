@@ -27,6 +27,7 @@ import argparse
 import json
 import math
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 from collections import deque, defaultdict, Counter
@@ -102,12 +103,46 @@ class MetricsCollector:
         # Coalesce control
         self._last_event_by_host_time: Dict[Tuple[int, int], Dict[str, Any]] = {}
 
+        # Per-target series and counts
+        # Each entry: {"concurrency": List[int], "cpu": List[float], "durations": List[float], "latencies": List[float], "total": int}
+        self.per_target: Dict[int, Dict[str, Any]] = defaultdict(lambda: {"concurrency": [], "cpu": [], "durations": [], "latencies": [], "total": 0})
+
+        # Summary counters
+        self.total_requests: int = 0
+        self.scale_up_events: int = 0
+        self.scale_down_events: int = 0
+        self.scale_up_targets_added: int = 0
+        self.scale_down_targets_removed: int = 0
+        self.sim_time_ms: int = 0
+        self.wall_runtime_seconds: Optional[float] = None
+
+        # Time-series for request rate and latency over time
+        self.arrival_times_ms: List[int] = []
+        self.latency_times_ms: List[int] = []
+        self.latency_values_ms: List[float] = []
+
+    def record_request_arrival(self, t_ms: int) -> None:
+        self.arrival_times_ms.append(int(t_ms))
+
     def record_request_completion(self, req: Request) -> None:
         self.retries_hist[req.retries_attempted] += 1
+        self.total_requests += 1
         if req.latency_ms is not None:
             self.latencies.append(float(req.latency_ms))
         if req.service_duration_ms is not None:
             self.service_durations.append(float(req.service_duration_ms))
+        # Latency time series
+        if req.end_time_ms is not None and req.latency_ms is not None:
+            self.latency_times_ms.append(int(req.end_time_ms))
+            self.latency_values_ms.append(float(req.latency_ms))
+        # Per-target request metrics
+        if req.chosen_target_id is not None:
+            series = self.per_target[req.chosen_target_id]
+            if req.service_duration_ms is not None:
+                series["durations"].append(float(req.service_duration_ms))
+            if req.latency_ms is not None:
+                series["latencies"].append(float(req.latency_ms))
+            series["total"] = int(series.get("total", 0)) + 1
 
     def record_decision_snapshot(
         self,
@@ -128,8 +163,13 @@ class MetricsCollector:
         conc_vals = []
         cpu_vals = []
         for tgt in targets:
-            conc_vals.append(tgt.current_concurrency)
-            cpu_vals.append(tgt.cpu_utilization())
+            conc = tgt.current_concurrency
+            cpuu = tgt.cpu_utilization()
+            conc_vals.append(conc)
+            cpu_vals.append(cpuu)
+            series = self.per_target[tgt.id]
+            series["concurrency"].append(conc)
+            series["cpu"].append(cpuu)
 
         self.per_target_concurrency_samples.extend(conc_vals)
         self.per_target_cpu_util_samples.extend(cpu_vals)
@@ -162,7 +202,27 @@ class MetricsCollector:
         # retries histogram (include zero)
         retries_hist_dict = dict(sorted(self.retries_hist.items(), key=lambda kv: kv[0]))
 
-        return {
+        # Per-target aggregated metrics
+        per_target_metrics: Dict[str, Any] = {}
+        for tid, series in self.per_target.items():
+            per_target_metrics[str(tid)] = {
+                "total_requests": int(series.get("total", 0)),
+                "concurrency_percentiles": {f"p{int(p)}": percentile(series["concurrency"], p) for p in percentiles_list},
+                "cpu_util_percentiles": {f"p{int(p)}": percentile(series["cpu"], p) for p in percentiles_list},
+                "request_duration_percentiles_ms": {f"p{int(p)}": percentile(series["durations"], p) for p in percentiles_list},
+                "request_latency_percentiles_ms": {f"p{int(p)}": percentile(series["latencies"], p) for p in percentiles_list},
+            }
+
+        report = {
+            "summary": {
+                "sim_time_ms": int(self.sim_time_ms),
+                "total_requests": int(self.total_requests),
+                "scale_up_events": int(self.scale_up_events),
+                "scale_down_events": int(self.scale_down_events),
+                "scale_up_targets_added": int(self.scale_up_targets_added),
+                "scale_down_targets_removed": int(self.scale_down_targets_removed),
+                "wall_runtime_seconds": None if self.wall_runtime_seconds is None else float(self.wall_runtime_seconds),
+            },
             "retries_histogram": retries_hist_dict,
             "per_target_concurrency_percentiles": conc_percentiles,
             "per_target_cpu_util_percentiles": cpu_percentiles,
@@ -175,7 +235,9 @@ class MetricsCollector:
                 "num_target_concurrency_samples": len(self.per_target_concurrency_samples),
                 "num_target_cpu_util_samples": len(self.per_target_cpu_util_samples),
             },
+            "per_target_metrics": per_target_metrics,
         }
+        return report
 
     def report_markdown(self, report: Dict[str, Any]) -> str:
         def dict_to_table(d: Dict[str, Any]) -> str:
@@ -190,6 +252,19 @@ class MetricsCollector:
 
         md = []
         md.append("# yolo-router Simulation Report\n")
+        # Run summary
+        summary = report.get("summary", {})
+        if summary:
+            md.append("## Run Summary\n")
+            md.append(dict_to_table({
+                "sim_time_ms": summary.get("sim_time_ms", "n/a"),
+                "total_requests": summary.get("total_requests", "n/a"),
+                "scale_up_events": summary.get("scale_up_events", "n/a"),
+                "scale_down_events": summary.get("scale_down_events", "n/a"),
+                "scale_up_targets_added": summary.get("scale_up_targets_added", "n/a"),
+                "scale_down_targets_removed": summary.get("scale_down_targets_removed", "n/a"),
+                "wall_runtime_seconds": summary.get("wall_runtime_seconds", "n/a"),
+            }))
         md.append("## Retries Histogram\n")
         if report["retries_histogram"]:
             md.append(dict_to_table(report["retries_histogram"]))
@@ -208,6 +283,30 @@ class MetricsCollector:
         md.append("\n")
         md.append("## Sample Counts\n")
         md.append(dict_to_table(report["samples"]))
+
+        # Per-target metrics
+        pt = report.get("per_target_metrics", {})
+        if pt:
+            md.append("\n## Per-Target Metrics\n")
+            # Sort by numeric target id if possible
+            def _key_fn(x):
+                try:
+                    return int(x)
+                except Exception:
+                    return str(x)
+            for tid in sorted(pt.keys(), key=_key_fn):
+                pm = pt[tid]
+                md.append(f"\n### Target {tid}\n")
+                md.append(dict_to_table({"total_requests": pm.get("total_requests", 0)}))
+                md.append("\nConcurrency percentiles\n")
+                md.append(dict_to_table(pm.get("concurrency_percentiles", {})))
+                md.append("\nCPU utilization percentiles\n")
+                md.append(dict_to_table(pm.get("cpu_util_percentiles", {})))
+                md.append("\nRequest duration (ms) percentiles\n")
+                md.append(dict_to_table(pm.get("request_duration_percentiles_ms", {})))
+                md.append("\nRequest latency (ms) percentiles\n")
+                md.append(dict_to_table(pm.get("request_latency_percentiles_ms", {})))
+
         return "".join(md)
 
 
@@ -322,6 +421,7 @@ class ScalingService:
         max_concurrency_per_target: int,
         cpu_capacity_per_target: float,
         delays: Dict[str, int],  # {scale_up_delay_ms, scale_down_delay_ms}
+        metrics: "MetricsCollector",
     ) -> None:
         self.env = env
         self.topology = topology
@@ -331,6 +431,7 @@ class ScalingService:
         self.scale_down_delay_ms = int(delays.get("scale_down_delay_ms", 0))
         self.min_targets = int(delays.get("min_targets", 1))
         self.max_targets = int(delays.get("max_targets", 1000000))
+        self.metrics = metrics
 
     def scale_up(self, count: int, initiator_host_id: Optional[int]) -> simpy.events.Event:
         # Returns an event that completes after the targets are added
@@ -356,6 +457,9 @@ class ScalingService:
             )
             self.topology.add_target(tgt, initiator_host_id=initiator_host_id)
             created_ids.append(tid)
+        # record event after successful additions
+        self.metrics.scale_up_events += 1
+        self.metrics.scale_up_targets_added += to_create
         return created_ids
 
     def _scale_down_proc(self, target_id: int, initiator_host_id: Optional[int]):
@@ -363,6 +467,9 @@ class ScalingService:
         if self.topology.fleet_size() <= self.min_targets:
             return False
         self.topology.remove_target(target_id, initiator_host_id=initiator_host_id)
+        # record event after successful removal
+        self.metrics.scale_down_events += 1
+        self.metrics.scale_down_targets_removed += 1
         return True
 
 
@@ -690,8 +797,17 @@ class LeastConnsLBHost(LBHostBase):
 class Simulation:
     def __init__(self, config: Dict[str, Any]) -> None:
         self.config = config
-        self.seed = int(config.get("simulation", {}).get("seed", 42))
-        self.duration_ms = int(config.get("simulation", {}).get("duration_ms", 60_000))
+        sim_cfg = config.get("simulation", {})
+        self.seed = int(sim_cfg.get("seed", 42))
+        self.duration_ms = int(sim_cfg.get("duration_ms", 60_000))
+        # Optional total test time; if provided, we stop the whole simulation at this time
+        self.total_time_ms: Optional[int] = sim_cfg.get("total_time_ms")
+        if self.total_time_ms is not None:
+            self.total_time_ms = int(self.total_time_ms)
+            # Generation stops no later than total_time_ms to allow in-flight within the fixed test time
+            self.generation_stop_ms = min(self.duration_ms, self.total_time_ms)
+        else:
+            self.generation_stop_ms = self.duration_ms
         self.rng = np.random.default_rng(self.seed)
 
         self.env = simpy.Environment()
@@ -700,14 +816,17 @@ class Simulation:
         self.max_concurrency_per_target = int(targets_cfg.get("max_concurrency_per_target", 10))
         self.cpu_capacity_per_target = float(targets_cfg.get("cpu_capacity_per_target", 100.0))
 
+        # Initialize metrics before services that will record into it
+        self.metrics = MetricsCollector()
+
         self.scaler = ScalingService(
             env=self.env,
             topology=self.topology,
             max_concurrency_per_target=self.max_concurrency_per_target,
             cpu_capacity_per_target=self.cpu_capacity_per_target,
             delays=config.get("scaling", {}),
+            metrics=self.metrics,
         )
-        self.metrics = MetricsCollector()
 
         # LB hosts
         lb_cfg = config.get("load_balancer", {})
@@ -758,11 +877,67 @@ class Simulation:
             )
             self.topology.add_target(tgt, initiator_host_id=None)
 
+    def _progress_logger(self, total_sim_ms: int, interval_ms: int = 60_000):
+        """Background process that logs progress every interval_ms of simulated time.
+
+        Logs:
+        - simulated minutes elapsed
+        - simulated minutes remaining
+        - wall time elapsed (seconds)
+        - estimated wall time remaining (seconds) using linear scaling
+        """
+        while True:
+            yield self.env.timeout(interval_ms)
+            elapsed_sim = int(self.env.now)
+            remaining_sim = max(0, total_sim_ms - elapsed_sim)
+            elapsed_min = elapsed_sim / 60000.0
+            remaining_min = remaining_sim / 60000.0
+            wall_elapsed = time.time() - getattr(self, "_wall_start", time.time())
+            est_wall_remaining = None
+            if elapsed_sim > 0:
+                est_wall_remaining = wall_elapsed * (remaining_sim / float(elapsed_sim))
+            # Print a concise progress log line
+            if est_wall_remaining is None:
+                print(f"[sim-progress] sim_elapsed_min={elapsed_min:.2f} min, sim_remaining_min={remaining_min:.2f} min, wall_elapsed_s={wall_elapsed:.2f}")
+            else:
+                print(f"[sim-progress] sim_elapsed_min={elapsed_min:.2f} min, sim_remaining_min={remaining_min:.2f} min, wall_elapsed_s={wall_elapsed:.2f}, est_wall_remaining_s={est_wall_remaining:.2f}")
+
     # --------------- Traffic generation ---------------
-    def _sample_interarrival_ms(self, cfg: Dict[str, Any]) -> int:
+    def _current_rate_per_sec(self, now_ms: int, cfg: Dict[str, Any]) -> float:
+        """Compute the current arrival rate per second, applying optional ramp settings."""
+        base_rate = float(cfg.get("rate_per_sec", 10.0))
+        ramp = cfg.get("ramp", {"mode": "none"})
+        mode = ramp.get("mode", "none")
+        if mode == "linear":
+            start = float(ramp.get("start_rate_per_sec", base_rate))
+            end = float(ramp.get("end_rate_per_sec", base_rate))
+            ramp_dur = int(ramp.get("ramp_duration_ms", 0))
+            hold_dur = int(ramp.get("hold_duration_ms", 0))
+            if ramp_dur <= 0:
+                return end
+            if now_ms <= ramp_dur:
+                return start + (end - start) * (now_ms / float(ramp_dur))
+            elif now_ms <= ramp_dur + hold_dur:
+                return end
+            else:
+                return end
+        elif mode == "steps":
+            # steps: array of {t_ms, rate_per_sec}; choose last with t_ms <= now
+            steps = ramp.get("steps", [])
+            current = base_rate
+            for step in steps:
+                t_ms = int(step.get("t_ms", 0))
+                r = float(step.get("rate_per_sec", current))
+                if now_ms >= t_ms:
+                    current = r
+            return current
+        else:
+            return base_rate
+
+    def _sample_interarrival_ms(self, cfg: Dict[str, Any], now_ms: int) -> int:
         dist = cfg.get("distribution", "poisson")
         if dist == "poisson":
-            rate_per_sec = float(cfg.get("rate_per_sec", 10.0))
+            rate_per_sec = self._current_rate_per_sec(now_ms, cfg)
             mean_ms = 1000.0 / max(rate_per_sec, 1e-9)
             return int(max(0.0, self.rng.exponential(mean_ms)))
         elif dist == "exponential":
@@ -880,7 +1055,7 @@ class Simulation:
         next_id = 1
         while True:
             now = int(self.env.now)
-            if now >= self.duration_ms:
+            if now >= self.generation_stop_ms:
                 return
             # Generate request
             req = Request(
@@ -890,22 +1065,42 @@ class Simulation:
                 cpu_demand=self._sample_cpu_demand(cpu_cfg),
             )
             next_id += 1
+            # Record arrival for rate chart
+            self.metrics.record_request_arrival(now)
             # Choose a host uniformly
             host = self.lb_hosts[self.rng.integers(0, len(self.lb_hosts))]
             # Spawn handling process
             self.env.process(host.handle_request(req))
             # Wait for next arrival
-            inter_ms = self._sample_interarrival_ms(arrival_cfg)
+            inter_ms = self._sample_interarrival_ms(arrival_cfg, now)
             yield self.env.timeout(inter_ms)
 
     def run(self) -> Dict[str, Any]:
+        # Start wall timer used for progress estimation and logging
+        self._wall_start = time.time()
         # Start request generator
         self.env.process(self._request_generator())
-        # Run until duration; allow inflight to finish by running a bit longer
-        self.env.run(until=self.duration_ms)
-        # Allow in-flight requests to complete; run additional time depending on max duration configured
-        drain_ms = int(self.config.get("simulation", {}).get("drain_ms", 10_000))
-        self.env.run(until=self.env.now + drain_ms)
+
+        # Compute total simulated test time for progress logging:
+        sim_cfg = self.config.get("simulation", {})
+        drain_ms = int(sim_cfg.get("drain_ms", 10_000))
+        total_sim_ms = int(self.total_time_ms) if self.total_time_ms is not None else (self.duration_ms + drain_ms)
+
+        # Start progress logger process that prints a line every simulated minute
+        self.env.process(self._progress_logger(total_sim_ms, interval_ms=60_000))
+
+        # Run according to configured timing policy
+        if self.total_time_ms is not None:
+            # Hard stop the simulation at total_time_ms
+            self.env.run(until=self.total_time_ms)
+        else:
+            # Legacy behavior: run generation for duration_ms, then drain for configured time
+            self.env.run(until=self.duration_ms)
+            self.env.run(until=self.env.now + drain_ms)
+
+        # Record summary timing
+        self.metrics.sim_time_ms = int(self.env.now)
+        self.metrics.wall_runtime_seconds = time.time() - self._wall_start
 
         # Build report
         report = self.metrics.build_report()
@@ -922,7 +1117,7 @@ DEFAULT_CONFIG = {
         "drain_ms": 10000,
     },
     "traffic": {
-        "arrival": {"distribution": "poisson", "rate_per_sec": 20.0},
+        "arrival": {"distribution": "poisson", "rate_per_sec": 20.0, "ramp": {"mode": "none"}},
         "request_duration_ms": {"mode": "distribution", "distribution": "lognormal", "mean_ms": 100.0, "sigma": 0.5},
         "cpu_demand": {"mode": "distribution", "distribution": "normal", "mean": 10.0, "stddev": 2.0},
     },
@@ -956,7 +1151,7 @@ DEFAULT_CONFIG = {
     },
     "reporting": {
         "output_dir": "reports",
-        "writers": ["json", "markdown"]
+        "writers": ["json", "markdown", "html"]
     },
 }
 
@@ -979,7 +1174,345 @@ def load_config(path: Optional[str]) -> Dict[str, Any]:
     return cfg
 
 
-def write_reports(report: Dict[str, Any], config: Dict[str, Any]) -> None:
+def _build_html_report(report: Dict[str, Any], metrics: "MetricsCollector", title: str = "yolo-router Simulation Report") -> str:
+    import json as _json
+    # Summary
+    summary = report.get("summary", {})
+    sim_time_ms = summary.get("sim_time_ms", 0)
+    total_requests = summary.get("total_requests", 0)
+    scale_up_events = summary.get("scale_up_events", 0)
+    scale_down_events = summary.get("scale_down_events", 0)
+    wall_runtime_seconds = summary.get("wall_runtime_seconds", None)
+    wall_runtime_display = "n/a" if wall_runtime_seconds is None else f"{wall_runtime_seconds:.3f}"
+
+    # Retries histogram (exclude zero-retries bucket for histogram)
+    retries = report.get("retries_histogram", {})
+    # Sort keys numerically and filter out the 0 bucket
+    keys_sorted = sorted(list(retries.keys()), key=lambda k: int(k))
+    filtered_keys = [k for k in keys_sorted if int(k) != 0]
+    retries_x = [str(k) for k in filtered_keys]
+    retries_y = [retries[k] for k in filtered_keys]
+
+    # Fleet size over time from decision events (downsample if large)
+    times = [e.get("t_ms", 0) for e in metrics.decision_events]
+    fleet = [e.get("fleet_size", 0) for e in metrics.decision_events]
+    if len(times) > 5000:
+        step = max(1, len(times) // 5000)
+        times = times[::step]
+        fleet = fleet[::step]
+
+    # Distributions (limit for size)
+    latencies = metrics.latencies[:5000]
+    durations = metrics.service_durations[:5000]
+
+    # Per-target totals from aggregated report
+    per_target = report.get("per_target_metrics", {})
+    pt_ids = list(per_target.keys())
+    pt_totals = [per_target[k].get("total_requests", 0) for k in pt_ids]
+
+    # Request rate over time (bucketed)
+    sim_total_ms = int(sim_time_ms) if sim_time_ms else (times[-1] if times else 0)
+    arrivals = getattr(metrics, "arrival_times_ms", [])
+    bucket_ms = max(100, sim_total_ms // 500) if sim_total_ms > 0 else 1000
+    if arrivals:
+        max_t = max(arrivals)
+        sim_total_ms = max(sim_total_ms, max_t)
+        num_buckets = int(sim_total_ms // bucket_ms) + 1
+        rate_counts = [0] * num_buckets
+        for t in arrivals:
+            idx = int(t // bucket_ms)
+            if 0 <= idx < num_buckets:
+                rate_counts[idx] += 1
+        rate_times = [i * bucket_ms for i in range(num_buckets)]
+        rate_rps = [c * (1000.0 / bucket_ms) for c in rate_counts]
+    else:
+        rate_times = []
+        rate_rps = []
+
+    # Retries over time (sum of retries_attempted across decision events per bucket)
+    retries_times = []
+    retries_rps = []
+    decisions = metrics.decision_events
+    if decisions and bucket_ms > 0:
+        # build buckets same as rate_times
+        num_buckets = int(sim_total_ms // bucket_ms) + 1 if sim_total_ms > 0 else 0
+        if num_buckets > 0:
+            retries_counts = [0] * num_buckets
+            for e in decisions:
+                t = int(e.get("t_ms", 0))
+                r = int(e.get("retries_attempted", 0))
+                idx = int(t // bucket_ms)
+                if 0 <= idx < num_buckets:
+                    retries_counts[idx] += r
+            retries_times = [i * bucket_ms for i in range(num_buckets)]
+            retries_rps = [c * (1000.0 / bucket_ms) for c in retries_counts]
+
+    # Latency over time (completion times)
+    lat_times = getattr(metrics, "latency_times_ms", [])[:]
+    lat_values = getattr(metrics, "latency_values_ms", [])[:]
+    # Keep a full copy for percentile calculations (do not downsample the source used for percentile windows)
+    lat_times_full = getattr(metrics, "latency_times_ms", [])[:]
+    lat_values_full = getattr(metrics, "latency_values_ms", [])[:]
+    if len(lat_times) > 5000:
+        step = max(1, len(lat_times) // 5000)
+        lat_times = lat_times[::step]
+        lat_values = lat_values[::step]
+
+    # Compute trailing-window latency percentiles (p99, p90, p80) per time point
+    # Use time axis = rate_times if available, otherwise fall back to decision event times
+    time_points = rate_times if rate_times else times
+    p99_series = []
+    p90_series = []
+    p80_series = []
+    window_ms = 60_000  # trailing 1 minute
+    if time_points and lat_times_full and lat_values_full:
+        # Convert to arrays for faster selection if large
+        lt = np.array(lat_times_full, dtype=float)
+        lv = np.array(lat_values_full, dtype=float)
+        for tp in time_points:
+            start = tp - window_ms
+            # select values with start < t <= tp
+            mask = (lt > start) & (lt <= tp)
+            vals = lv[mask]
+            if vals.size:
+                p99_series.append(float(np.percentile(vals, 99)))
+                p90_series.append(float(np.percentile(vals, 90)))
+                p80_series.append(float(np.percentile(vals, 80)))
+            else:
+                p99_series.append(None)
+                p90_series.append(None)
+                p80_series.append(None)
+    else:
+        p99_series = []
+        p90_series = []
+        p80_series = []
+
+    # Helper to render a dict as a simple HTML table (one header row, one value row)
+    def dict_to_table_html(d: Dict[str, Any], title: Optional[str] = None) -> str:
+        if not d:
+            return "" if title is None else f"<h3>{title}</h3><p><em>No data</em></p>"
+        keys = list(d.keys())
+        vals = [d[k] for k in keys]
+        header = "".join(f"<th>{str(k)}</th>" for k in keys)
+        row = "".join(f"<td>{str(v)}</td>" for v in vals)
+        title_html = "" if title is None else f"<h3>{title}</h3>"
+        return f"""{title_html}
+<table class="table">
+  <thead><tr>{header}</tr></thead>
+  <tbody><tr>{row}</tr></tbody>
+</table>
+"""
+
+    # Build numeric tables mirroring JSON numeric sections (non per-target)
+    retries_tbl = dict_to_table_html(retries, "Retries Histogram")
+    conc_tbl = dict_to_table_html(report.get("per_target_concurrency_percentiles", {}), "Per-Target Concurrent Requests (percentiles)")
+    cpu_tbl = dict_to_table_html(report.get("per_target_cpu_util_percentiles", {}), "Per-Target CPU Utilization (percentiles)")
+    fleet_tbl = dict_to_table_html(report.get("fleet_size_percentiles", {}), "Fleet Size (percentiles)")
+    dur_tbl = dict_to_table_html(report.get("request_duration_percentiles_ms", {}), "Request Duration (ms) (percentiles)")
+    lat_tbl = dict_to_table_html(report.get("request_latency_percentiles_ms", {}), "Request Latency (ms) (percentiles)")
+    samples_tbl = dict_to_table_html(report.get("samples", {}), "Sample Counts")
+
+    numeric_tables_html = f"""
+<div class="section">
+  <h2>Numeric Tables</h2>
+  {retries_tbl}
+  {conc_tbl}
+  {cpu_tbl}
+  {fleet_tbl}
+  {dur_tbl}
+  {lat_tbl}
+  {samples_tbl}
+</div>
+"""
+
+    # Build per-target tables
+    # Render each target with its totals and percentiles
+    def per_target_section(tid: str, metrics_obj: Dict[str, Any]) -> str:
+        sec = [f'<div class="section"><h3>Target {tid}</h3>']
+        sec.append(dict_to_table_html({"total_requests": metrics_obj.get("total_requests", 0)}))
+        sec.append(dict_to_table_html(metrics_obj.get("concurrency_percentiles", {}), "Concurrency percentiles"))
+        sec.append(dict_to_table_html(metrics_obj.get("cpu_util_percentiles", {}), "CPU utilization percentiles"))
+        sec.append(dict_to_table_html(metrics_obj.get("request_duration_percentiles_ms", {}), "Request duration (ms) percentiles"))
+        sec.append(dict_to_table_html(metrics_obj.get("request_latency_percentiles_ms", {}), "Request latency (ms) percentiles"))
+        sec.append("</div>")
+        return "\n".join(sec)
+
+    if pt_ids:
+        # sort by numeric when possible
+        try:
+            pt_ids_sorted = sorted(pt_ids, key=lambda x: int(x))
+        except Exception:
+            pt_ids_sorted = sorted(pt_ids)
+    else:
+        pt_ids_sorted = []
+
+    per_target_tables_html = ""
+    if pt_ids_sorted:
+        sections = []
+        sections.append('<div class="section"><h2>Per-Target Metrics (Tables)</h2>')
+        for tid in pt_ids_sorted:
+            sections.append(per_target_section(tid, per_target.get(tid, {})))
+        sections.append("</div>")
+        per_target_tables_html = "\n".join(sections)
+    else:
+        per_target_tables_html = ""
+
+    html = f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>{title}</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+body {{ font-family: Arial, sans-serif; margin: 20px; }}
+h1, h2 {{ margin: 0.5em 0; }}
+.chart {{ width: 100%; height: 420px; }}
+.section {{ margin-bottom: 40px; }}
+
+/* Table styling: borders, padding and improved spacing */
+table.table {{ border-collapse: collapse; width: 100%; margin-top: 8px; }}
+table.table th, table.table td {{ border: 1px solid #ddd; padding: 10px 12px; text-align: left; vertical-align: middle; }}
+table.table thead th {{ background-color: #f8f9fa; font-weight: 600; }}
+table.table tbody tr:nth-child(even) {{ background-color: #fafafa; }}
+.table-container {{ overflow-x: auto; padding: 8px 0; }}
+</style>
+</head>
+<body>
+<h1>{title}</h1>
+
+<div class="section">
+  <h2>Run Summary</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Sim Time (ms)</th>
+        <th>Total Requests</th>
+        <th>Scale Ups</th>
+        <th>Scale Downs</th>
+        <th>Wall Runtime (s)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>{sim_time_ms}</td>
+        <td>{total_requests}</td>
+        <td>{scale_up_events}</td>
+        <td>{scale_down_events}</td>
+        <td>{wall_runtime_display}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h2>Retries Histogram</h2>
+  <div id="retries" class="chart"></div>
+</div>
+
+<div class="section">
+  <h2>Fleet Size Over Time</h2>
+  <div id="fleet" class="chart"></div>
+</div>
+
+<div class="section">
+  <h2>Latency Distribution (samples)</h2>
+  <div id="latency" class="chart"></div>
+</div>
+
+<div class="section">
+  <h2>Service Duration Distribution (samples)</h2>
+  <div id="duration" class="chart"></div>
+</div>
+
+<div class="section">
+  <h2>Per-Target Total Requests</h2>
+  <div id="perTargetTotals" class="chart"></div>
+</div>
+
+<div class="section">
+  <h2>Retries Over Time</h2>
+  <div id="retriesOverTime" class="chart"></div>
+</div>
+
+<div class="section">
+  <h2>Request Rate Over Time</h2>
+  <div id="reqRate" class="chart"></div>
+</div>
+
+<div class="section">
+  <h2>Latency Over Time</h2>
+  <div id="latencyOverTime" class="chart"></div>
+</div>
+
+{numeric_tables_html}
+
+{per_target_tables_html}
+
+<script>
+const retriesX = {_json.dumps(retries_x)};
+const retriesY = {_json.dumps(retries_y)};
+
+const times = {_json.dumps(times)};
+const fleet = {_json.dumps(fleet)};
+
+const latencies = {_json.dumps(latencies)};
+const durations = {_json.dumps(durations)};
+
+const ptIds = {_json.dumps(pt_ids)};
+const ptTotals = {_json.dumps(pt_totals)};
+
+const rateTimes = {_json.dumps(rate_times)};
+const rateRps = {_json.dumps(rate_rps)};
+const retriesTimes = {_json.dumps(retries_times)};
+const retriesRps = {_json.dumps(retries_rps)};
+const latTimes = {_json.dumps(lat_times)};
+const latValues = {_json.dumps(lat_values)};
+
+const p99Series = {_json.dumps(p99_series)};
+const p90Series = {_json.dumps(p90_series)};
+const p80Series = {_json.dumps(p80_series)};
+
+Plotly.newPlot('retries', [{{
+  x: retriesX, y: retriesY, type: 'bar', marker: {{color: '#2a9d8f'}}
+}}], {{title: 'Retries', xaxis: {{title: 'Retries'}}, yaxis: {{title: 'Count'}}}});
+
+Plotly.newPlot('fleet', [{{
+  x: times, y: fleet, type: 'scatter', mode: 'lines', line: {{color: '#264653'}}
+}}], {{title: 'Fleet Size Over Time', xaxis: {{title: 't (ms)'}}, yaxis: {{title: '# targets'}}}});
+
+Plotly.newPlot('latency', [{{
+  x: latencies, type: 'histogram', marker: {{color: '#e76f51'}}, nbinsx: 50
+}}], {{title: 'Latency (ms)', xaxis: {{title: 'Latency (ms)'}}, yaxis: {{title: 'Count'}}}});
+
+Plotly.newPlot('duration', [{{
+  x: durations, type: 'histogram', marker: {{color: '#f4a261'}}, nbinsx: 50
+}}], {{title: 'Service Duration (ms)', xaxis: {{title: 'Duration (ms)'}}, yaxis: {{title: 'Count'}}}});
+
+Plotly.newPlot('perTargetTotals', [{{
+  x: ptIds, y: ptTotals, type: 'bar', marker: {{color: '#457b9d'}}
+}}], {{title: 'Per-Target Total Requests', xaxis: {{title: 'Target ID'}}, yaxis: {{title: 'Total'}}}});
+
+Plotly.newPlot('reqRate', [{{
+  x: rateTimes, y: rateRps, type: 'scatter', mode: 'lines', line: {{color: '#1d3557'}}
+}}], {{title: 'Request Rate (req/s) Over Time', xaxis: {{title: 't (ms)'}}, yaxis: {{title: 'req/s'}}}});
+
+Plotly.newPlot('latencyOverTime', [
+{{"x": latTimes, "y": latValues, "type": "scatter", "mode": "markers", "marker": {{ "color": "#8e44ad", "size": 3, "opacity": 0.5 }}, "name": "per-request latency"}} ,
+{{"x": rateTimes, "y": p99Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#d00000", "width": 2 }}, "name": "p99 (trailing 1m)"}} ,
+{{"x": rateTimes, "y": p90Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#f77f00", "width": 2 }}, "name": "p90 (trailing 1m)"}} ,
+{{"x": rateTimes, "y": p80Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#f4a261", "width": 2 }}, "name": "p80 (trailing 1m)"}} 
+], {{title: 'Latency Over Time (per-request + trailing percentiles)', xaxis: {{title: 't (ms)'}}, yaxis: {{title: 'latency (ms)'}}}});
+
+Plotly.newPlot('retriesOverTime', [{{
+  x: retriesTimes, y: retriesRps, type: 'bar', marker: {{color: '#e63946'}}
+}}], {{title: 'Retries Over Time (retries/sec)', xaxis: {{title: 't (ms)'}}, yaxis: {{title: 'retries/s'}}}});
+</script>
+</body>
+</html>
+"""
+    return html
+
+def write_reports(report: Dict[str, Any], config: Dict[str, Any], metrics: "MetricsCollector") -> None:
     rep_cfg = config.get("reporting", {})
     writers = rep_cfg.get("writers", ["json", "markdown"])
     outdir = rep_cfg.get("output_dir", "reports")
@@ -999,6 +1532,13 @@ def write_reports(report: Dict[str, Any], config: Dict[str, Any]) -> None:
         with open(path, "w") as f:
             f.write(md)
         print(f"Wrote Markdown report: {path}")
+    # HTML
+    if "html" in writers:
+        html_path = os.path.join(outdir, "report.html")
+        html = _build_html_report(report, metrics, title="yolo-router Simulation Report")
+        with open(html_path, "w") as f:
+            f.write(html)
+        print(f"Wrote HTML report: {html_path}")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1019,7 +1559,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     sim = Simulation(cfg)
     report = sim.run()
-    write_reports(report, cfg)
+    write_reports(report, cfg, sim.metrics)
 
     # Also print a concise summary
     print(json.dumps(report, indent=2))

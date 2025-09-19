@@ -1,0 +1,181 @@
+{
+  "summary": {
+    "sim_time_ms": 1200000,
+    "total_requests": 11855,
+    "scale_up_events": 2,
+    "scale_down_events": 0,
+    "scale_up_targets_added": 2,
+    "scale_down_targets_removed": 0,
+    "wall_runtime_seconds": 0.24248766899108887
+  },
+  "retries_histogram": {
+    "0": 11855
+  },
+  "per_target_concurrency_percentiles": {
+    "p100": 3.0,
+    "p99": 2.0,
+    "p90": 1.0,
+    "p80": 1.0,
+    "p50": 1.0
+  },
+  "per_target_cpu_util_percentiles": {
+    "p100": 0.3193896334415172,
+    "p99": 0.19345259846729973,
+    "p90": 0.11862761979098244,
+    "p80": 0.10614800285457374,
+    "p50": 0.06123898129405408
+  },
+  "fleet_size_percentiles": {
+    "p100": 4.0,
+    "p99": 4.0,
+    "p90": 4.0,
+    "p80": 4.0,
+    "p50": 4.0
+  },
+  "request_duration_percentiles_ms": {
+    "p100": 905.0,
+    "p99": 319.0,
+    "p90": 189.0,
+    "p80": 151.0,
+    "p50": 99.0
+  },
+  "request_latency_percentiles_ms": {
+    "p100": 905.0,
+    "p99": 319.0,
+    "p90": 189.0,
+    "p80": 151.0,
+    "p50": 99.0
+  },
+  "samples": {
+    "num_decision_events": 11855,
+    "num_fleet_samples": 11855,
+    "num_target_concurrency_samples": 47419,
+    "num_target_cpu_util_samples": 47419
+  },
+  "per_target_metrics": {
+    "1": {
+      "total_requests": 2964,
+      "concurrency_percentiles": {
+        "p100": 2.0,
+        "p99": 2.0,
+        "p90": 1.0,
+        "p80": 1.0,
+        "p50": 1.0
+      },
+      "cpu_util_percentiles": {
+        "p100": 0.270031674392863,
+        "p99": 0.1968618370745166,
+        "p90": 0.11822814046559622,
+        "p80": 0.10599479084701371,
+        "p50": 0.059611953456268664
+      },
+      "request_duration_percentiles_ms": {
+        "p100": 462.0,
+        "p99": 329.0,
+        "p90": 190.0,
+        "p80": 152.0,
+        "p50": 99.0
+      },
+      "request_latency_percentiles_ms": {
+        "p100": 462.0,
+        "p99": 329.0,
+        "p90": 190.0,
+        "p80": 152.0,
+        "p50": 99.0
+      }
+    },
+    "2": {
+      "total_requests": 2963,
+      "concurrency_percentiles": {
+        "p100": 3.0,
+        "p99": 2.0,
+        "p90": 1.0,
+        "p80": 1.0,
+        "p50": 1.0
+      },
+      "cpu_util_percentiles": {
+        "p100": 0.3193896334415172,
+        "p99": 0.20060420361641526,
+        "p90": 0.11929212782590298,
+        "p80": 0.10627117000439495,
+        "p50": 0.06301713271675596
+      },
+      "request_duration_percentiles_ms": {
+        "p100": 905.0,
+        "p99": 324.7600000000002,
+        "p90": 190.0,
+        "p80": 153.0,
+        "p50": 99.0
+      },
+      "request_latency_percentiles_ms": {
+        "p100": 905.0,
+        "p99": 324.7600000000002,
+        "p90": 190.0,
+        "p80": 153.0,
+        "p50": 99.0
+      }
+    },
+    "3": {
+      "total_requests": 2964,
+      "concurrency_percentiles": {
+        "p100": 2.0,
+        "p99": 2.0,
+        "p90": 1.0,
+        "p80": 1.0,
+        "p50": 1.0
+      },
+      "cpu_util_percentiles": {
+        "p100": 0.29217976277539476,
+        "p99": 0.19022204386080196,
+        "p90": 0.11862276734408228,
+        "p80": 0.10627898693449644,
+        "p50": 0.06337941231690548
+      },
+      "request_duration_percentiles_ms": {
+        "p100": 539.0,
+        "p99": 312.3699999999999,
+        "p90": 185.0,
+        "p80": 150.0,
+        "p50": 98.0
+      },
+      "request_latency_percentiles_ms": {
+        "p100": 539.0,
+        "p99": 312.3699999999999,
+        "p90": 185.0,
+        "p80": 150.0,
+        "p50": 98.0
+      }
+    },
+    "4": {
+      "total_requests": 2964,
+      "concurrency_percentiles": {
+        "p100": 3.0,
+        "p99": 2.0,
+        "p90": 1.0,
+        "p80": 1.0,
+        "p50": 1.0
+      },
+      "cpu_util_percentiles": {
+        "p100": 0.30339869118519774,
+        "p99": 0.18545991943060655,
+        "p90": 0.11858684218067428,
+        "p80": 0.10612958080162224,
+        "p50": 0.057918347830056505
+      },
+      "request_duration_percentiles_ms": {
+        "p100": 569.0,
+        "p99": 301.3699999999999,
+        "p90": 188.0,
+        "p80": 151.0,
+        "p50": 99.0
+      },
+      "request_latency_percentiles_ms": {
+        "p100": 569.0,
+        "p99": 301.3699999999999,
+        "p90": 188.0,
+        "p80": 151.0,
+        "p50": 99.5
+      }
+    }
+  }
+}

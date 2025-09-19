@@ -1,20 +1,20 @@
 {
   "simulation": {
-    "seed": 123,
-    "duration_ms": 400000,
-    "drain_ms": 5000,
-    "total_time_ms": 440000
+    "seed": 1,
+    "duration_ms": 1200000,
+    "drain_ms": 10000,
+    "total_time_ms": 1200000
   },
   "traffic": {
     "arrival": {
       "distribution": "poisson",
-      "rate_per_sec": 20.0,
+      "rate_per_sec": 5.0,
       "ramp": {
         "mode": "linear",
-        "start_rate_per_sec": 20.0,
-        "end_rate_per_sec": 2000.0,
-        "ramp_duration_ms": 400000,
-        "hold_duration_ms": 20000
+        "start_rate_per_sec": 1.0,
+        "end_rate_per_sec": 10.0,
+        "ramp_duration_ms": 60000,
+        "hold_duration_ms": 60000
       }
     },
     "request_duration_ms": {
@@ -32,30 +32,30 @@
   },
   "load_balancer": {
     "architecture": "round_robin",
-    "hosts": 3,
+    "hosts": 1,
     "rr": {
-      "retry_limit": 2,
+      "retry_limit": 1,
       "sync_delay_ms": 100,
-      "idle_scale_down_threshold_requests_5m": 2
+      "idle_scale_down_threshold_requests_5m": 1
     }
   },
   "targets": {
-    "initial_count": 4,
-    "max_concurrency_per_target": 8,
+    "initial_count": 2,
+    "max_concurrency_per_target": 5,
     "cpu_capacity_per_target": 100.0
   },
   "scaling": {
     "min_targets": 1,
-    "max_targets": 50,
-    "scale_up_delay_ms": 200,
-    "scale_down_delay_ms": 300
+    "max_targets": 10,
+    "scale_up_delay_ms": 100,
+    "scale_down_delay_ms": 100
   },
   "sampling": {
     "mode": "event",
     "sample_on": ["lb_decision"]
   },
   "reporting": {
-    "output_dir": "reports/round_robin",
+    "output_dir": "reports/demo_progress",
     "writers": ["json", "markdown", "html"]
   }
 }
