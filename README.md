@@ -1,6 +1,9 @@
 # yolo-router
 
-A discrete-event simulation (SimPy) that models two load-balancing architectures and their scaling behaviors under configurable traffic:
+A discrete-event simulation (SimPy) that was written entirely using spec driven development with OpenAI GPT5 + Cline in VSCode. For details on the design spec and prompts used
+see design.md.
+
+The simulation presents supports supports two load-balancing architectures and their scaling behaviors under configurable traffic:
 
 - Round Robin (RR)
 - Least Connections (LC)
