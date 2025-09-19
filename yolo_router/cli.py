@@ -1213,9 +1213,9 @@ def _build_html_report(report: Dict[str, Any], metrics: "MetricsCollector", titl
         times = times[::step]
         fleet = fleet[::step]
 
-    # Distributions (limit for size)
-    latencies = metrics.latencies[:5000]
-    durations = metrics.service_durations[:5000]
+    # Distributions (use all collected samples for distribution plots)
+    latencies = metrics.latencies
+    durations = metrics.service_durations
 
     # Per-target totals from aggregated report
     per_target = report.get("per_target_metrics", {})
@@ -1241,23 +1241,31 @@ def _build_html_report(report: Dict[str, Any], metrics: "MetricsCollector", titl
         rate_times = []
         rate_rps = []
 
-    # Retries over time (sum of retries_attempted across decision events per bucket)
+    # Retries & rejects over time (bucketed)
     retries_times = []
     retries_rps = []
+    rejects_times = []
+    rejects_rps = []
     decisions = metrics.decision_events
     if decisions and bucket_ms > 0:
         # build buckets same as rate_times
         num_buckets = int(sim_total_ms // bucket_ms) + 1 if sim_total_ms > 0 else 0
         if num_buckets > 0:
             retries_counts = [0] * num_buckets
+            reject_counts = [0] * num_buckets
             for e in decisions:
                 t = int(e.get("t_ms", 0))
                 r = int(e.get("retries_attempted", 0))
+                outcome = e.get("outcome", "")
                 idx = int(t // bucket_ms)
                 if 0 <= idx < num_buckets:
                     retries_counts[idx] += r
+                    if outcome == "reject":
+                        reject_counts[idx] += 1
             retries_times = [i * bucket_ms for i in range(num_buckets)]
             retries_rps = [c * (1000.0 / bucket_ms) for c in retries_counts]
+            rejects_times = [i * bucket_ms for i in range(num_buckets)]
+            rejects_rps = [c * (1000.0 / bucket_ms) for c in reject_counts]
 
     # Latency over time (completion times)
     lat_times = getattr(metrics, "latency_times_ms", [])[:]
@@ -1270,10 +1278,12 @@ def _build_html_report(report: Dict[str, Any], metrics: "MetricsCollector", titl
         lat_times = lat_times[::step]
         lat_values = lat_values[::step]
 
-    # Compute trailing-window latency percentiles (p99, p90, p80) per time point
+    # Compute trailing-window latency percentiles (p99, p99.9, p99.99, p90, p80) per time point
     # Use time axis = rate_times if available, otherwise fall back to decision event times
     time_points = rate_times if rate_times else times
     p99_series = []
+    p99_9_series = []
+    p99_99_series = []
     p90_series = []
     p80_series = []
     window_ms = 60_000  # trailing 1 minute
@@ -1288,14 +1298,21 @@ def _build_html_report(report: Dict[str, Any], metrics: "MetricsCollector", titl
             vals = lv[mask]
             if vals.size:
                 p99_series.append(float(np.percentile(vals, 99)))
+                # numpy.percentile supports fractional quantiles; compute 99.9 and 99.99
+                p99_9_series.append(float(np.percentile(vals, 99.9)))
+                p99_99_series.append(float(np.percentile(vals, 99.99)))
                 p90_series.append(float(np.percentile(vals, 90)))
                 p80_series.append(float(np.percentile(vals, 80)))
             else:
                 p99_series.append(None)
+                p99_9_series.append(None)
+                p99_99_series.append(None)
                 p90_series.append(None)
                 p80_series.append(None)
     else:
         p99_series = []
+        p99_9_series = []
+        p99_99_series = []
         p90_series = []
         p80_series = []
 
@@ -1442,13 +1459,8 @@ table.table tbody tr:nth-child(even) {{ background-color: #fafafa; }}
 </div>
 
 <div class="section">
-  <h2>Retries Over Time</h2>
-  <div id="retriesOverTime" class="chart"></div>
-</div>
-
-<div class="section">
-  <h2>Request Rate Over Time</h2>
-  <div id="reqRate" class="chart"></div>
+  <h2>Rates Over Time</h2>
+  <div id="ratesCombined" class="chart"></div>
 </div>
 
 <div class="section">
@@ -1477,10 +1489,14 @@ const rateTimes = {_json.dumps(rate_times)};
 const rateRps = {_json.dumps(rate_rps)};
 const retriesTimes = {_json.dumps(retries_times)};
 const retriesRps = {_json.dumps(retries_rps)};
+const rejects_times = {_json.dumps(rejects_times)};
+const rejects_rps = {_json.dumps(rejects_rps)};
 const latTimes = {_json.dumps(lat_times)};
 const latValues = {_json.dumps(lat_values)};
 
 const p99Series = {_json.dumps(p99_series)};
+const p99_9Series = {_json.dumps(p99_9_series)};
+const p99_99Series = {_json.dumps(p99_99_series)};
 const p90Series = {_json.dumps(p90_series)};
 const p80Series = {_json.dumps(p80_series)};
 
@@ -1504,20 +1520,24 @@ Plotly.newPlot('perTargetTotals', [{{
   x: ptIds, y: ptTotals, type: 'bar', marker: {{color: '#457b9d'}}
 }}], {{title: 'Per-Target Total Requests', xaxis: {{title: 'Target ID'}}, yaxis: {{title: 'Total'}}}});
 
-Plotly.newPlot('reqRate', [{{
-  x: rateTimes, y: rateRps, type: 'scatter', mode: 'lines', line: {{color: '#1d3557'}}
-}}], {{title: 'Request Rate (req/s) Over Time', xaxis: {{title: 't (ms)'}}, yaxis: {{title: 'req/s'}}}});
+/* Combined rates chart: retries/sec (bar), rejects/sec (bar), requests/sec (line) — all on the same Y axis */
+Plotly.newPlot('ratesCombined', [{{
+  x: retriesTimes, y: retriesRps, type: 'bar', name: 'retries/sec', marker: {{color: '#e63946'}}
+}}, {{
+  x: rejects_times, y: rejects_rps, type: 'bar', name: 'rejects/sec', marker: {{color: '#00FFFF'}}
+}}, {{
+  x: rateTimes, y: rateRps, type: 'scatter', mode: 'lines', name: 'requests/sec', line: {{color: '#1d3557'}}
+}}], {{title: 'Rates Over Time', xaxis: {{title: 't (ms)'}}, yaxis: {{title: 'count/sec'}}}});
 
+/* Latency chart remains unchanged below */
 Plotly.newPlot('latencyOverTime', [
 {{"x": latTimes, "y": latValues, "type": "scatter", "mode": "markers", "marker": {{ "color": "#8e44ad", "size": 3, "opacity": 0.5 }}, "name": "per-request latency"}} ,
+{{"x": rateTimes, "y": p99_99Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#7f0000", "width": 2 }}, "name": "p99.99 (trailing 1m)"}} ,
+{{"x": rateTimes, "y": p99_9Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#b30000", "width": 2 }}, "name": "p99.9 (trailing 1m)"}} ,
 {{"x": rateTimes, "y": p99Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#d00000", "width": 2 }}, "name": "p99 (trailing 1m)"}} ,
 {{"x": rateTimes, "y": p90Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#f77f00", "width": 2 }}, "name": "p90 (trailing 1m)"}} ,
 {{"x": rateTimes, "y": p80Series, "type": "scatter", "mode": "lines", "line": {{ "color": "#f4a261", "width": 2 }}, "name": "p80 (trailing 1m)"}} 
 ], {{title: 'Latency Over Time (per-request + trailing percentiles)', xaxis: {{title: 't (ms)'}}, yaxis: {{title: 'latency (ms)'}}}});
-
-Plotly.newPlot('retriesOverTime', [{{
-  x: retriesTimes, y: retriesRps, type: 'bar', marker: {{color: '#e63946'}}
-}}], {{title: 'Retries Over Time (retries/sec)', xaxis: {{title: 't (ms)'}}, yaxis: {{title: 'retries/s'}}}});
 </script>
 </body>
 </html>

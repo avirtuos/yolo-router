@@ -28,6 +28,7 @@ python -m yolo_router --config configs/example_least_conns.json
 3) Find the reports:
 - JSON: `reports/<scenario>/report.json`
 - Markdown: `reports/<scenario>/report.md`
+- HTML: `reports/<scenario>/report.html` (if `html` writer enabled)
 
 4) CLI overrides (optional):
 - `--arch round_robin|least_conns` override architecture
@@ -88,10 +89,10 @@ Top-level sections:
   - `rr`:
     - `retry_limit` (int): LB retries on target rejection
     - `sync_delay_ms` (int): propagation delay for topology updates to other hosts
-    - `idle_scale_down_threshold_requests_5m` (int): if a target handled fewer than this many requests in the past 5 minutes (sim-time), scale it down (when idle)
+    - `idle_scale_down_threshold_requests_5m` (int): legacy threshold (see notes below)
   - `lc`:
     - `shared_map_lock_latency_ms` (int): optional lock latency overhead
-    - `idle_scale_down_threshold_outstanding_5m` (int): analogous idle threshold for LC
+    - `idle_scale_down_threshold_outstanding_5m` (int): legacy threshold (see notes below)
 - `targets`
   - `initial_count` (int)
   - `max_concurrency_per_target` (int): hard concurrent request cap per target
@@ -101,12 +102,13 @@ Top-level sections:
   - `max_targets` (int): upper bound on fleet size
   - `scale_up_delay_ms` (int)
   - `scale_down_delay_ms` (int)
+  - `idle_scale_down_avg_concurrency_1m` (float, optional): new config to control scale-down selection — targets with trailing-1m average concurrency below this value are eligible for scale-down (default 1.0 if omitted).
 - `sampling`
   - `mode`: "event" (event-driven sampling at LB decision boundaries)
   - `sample_on`: array; currently includes "lb_decision"
 - `reporting`
   - `output_dir` (string)
-  - `writers`: ["json", "markdown"] (set of writers)
+  - `writers`: ["json", "markdown", "html"] (set of writers)
 
 ### Example: Round Robin config (excerpt)
 
@@ -132,10 +134,11 @@ Top-level sections:
     "min_targets": 1,
     "max_targets": 50,
     "scale_up_delay_ms": 200,
-    "scale_down_delay_ms": 300
+    "scale_down_delay_ms": 300,
+    "idle_scale_down_avg_concurrency_1m": 1.0
   },
   "sampling": { "mode": "event", "sample_on": ["lb_decision"] },
-  "reporting": { "output_dir": "reports/round_robin", "writers": ["json", "markdown"] }
+  "reporting": { "output_dir": "reports/round_robin", "writers": ["json", "markdown", "html"] }
 }
 ```
 
@@ -154,8 +157,19 @@ Reports are generated at the end of the run:
   - total_requests handled by each target
   - Percentiles for concurrency, CPU utilization, request duration, and latency
 
+Visualizations in the HTML report:
+- Latency Over Time:
+  - Per-request latency scatter markers (every completed request)
+  - Trailing 1-minute percentile lines: p99.99, p99.9, p99, p90, p80 (computed on the full completion stream)
+- Latency Distribution (histogram) and Service Duration Distribution (histogram)
+  - These histograms now use the full set of collected samples (no downsample), so they reflect all completed requests for the run.
+
 Notes:
 - Sampling is event-driven at every load-balancing decision, reflecting state at decision boundaries.
+- The scale-down selection logic was updated to use a trailing 1-minute average concurrency per target (configurable via `scaling.idle_scale_down_avg_concurrency_1m`) rather than the previous "handled requests in trailing 5 minutes" counting approach. Both RR and LC scale-down scanners use the trailing-1m average concurrency criterion.
+- If runs produce very large sample counts, the HTML histogram render may be heavier in the browser. If that becomes an issue we can:
+  - Keep percentiles computed from the full sample set but downsample only for the histogram rendering (configurable cap).
+  - Add a config flag to control histogram sample capping.
 - All times are simulated time (ms). No wall-clock (e.g. `time.time()`/`sleep`) is used.
 
 ## Project layout
@@ -194,12 +208,12 @@ Notes:
     - Maintains per-host local list of targets and round-robin index
     - On rejection, retries up to `retry_limit`; then scales up if needed
     - Propagates topology changes to other hosts after `sync_delay_ms` (initiator learns immediately)
-    - Periodic (sim-time) scan for idle targets to scale down
+    - Periodic (sim-time) scan for idle targets to scale down (uses trailing-1m avg concurrency by default if configured)
   - `class SharedLeastConnsState`: shared outstanding count map protected by a `simpy.Resource` mutex; methods update counts with optional lock latency
   - `class LeastConnsLBHost`:
     - Atomically selects target with the least outstanding requests under `max_concurrency`
     - If none available, scales up and routes to new target (updating shared state)
-    - Tracks completion via shared state; also performs idle scale-down scans
+    - Tracks completion via shared state; also performs idle scale-down scans (uses trailing-1m avg concurrency by default if configured)
 - Metrics and reporting
   - `class MetricsCollector`:
     - Request-level metrics: retries, latencies, service durations
@@ -208,7 +222,7 @@ Notes:
     - `build_report()`: returns a dict consumed by writers
     - `report_markdown(report)`: returns a Markdown string
 - CLI
-  - `main(argv=None)`: parses arguments, loads/merges config, runs `Simulation`, writes JSON/Markdown reports
+  - `main(argv=None)`: parses arguments, loads/merges config, runs `Simulation`, writes JSON/Markdown/HTML reports
 
 ## Modeling notes
 

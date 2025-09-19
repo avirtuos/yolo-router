@@ -12,7 +12,7 @@
       "ramp": {
         "mode": "linear",
         "start_rate_per_sec": 20.0,
-        "end_rate_per_sec": 2000.0,
+        "end_rate_per_sec": 400.0,
         "ramp_duration_ms": 400000,
         "hold_duration_ms": 20000
       }
@@ -32,7 +32,7 @@
   },
   "load_balancer": {
     "architecture": "round_robin",
-    "hosts": 3,
+    "hosts": 10,
     "rr": {
       "retry_limit": 2,
       "sync_delay_ms": 100,
@@ -47,8 +47,8 @@
   },
   "scaling": {
     "min_targets": 1,
-    "max_targets": 50,
-    "scale_up_delay_ms": 200,
+    "max_targets": 100,
+    "scale_up_delay_ms": 500,
     "scale_down_delay_ms": 300
   },
   "sampling": {

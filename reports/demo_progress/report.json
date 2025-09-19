@@ -6,7 +6,7 @@
     "scale_down_events": 0,
     "scale_up_targets_added": 2,
     "scale_down_targets_removed": 0,
-    "wall_runtime_seconds": 0.24248766899108887
+    "wall_runtime_seconds": 0.2506866455078125
   },
   "retries_histogram": {
     "0": 11855
