@@ -39,7 +39,7 @@ table.table tbody tr:nth-child(even) { background-color: #fafafa; }
         <td>96698</td>
         <td>10</td>
         <td>0</td>
-        <td>2.263</td>
+        <td>2.467</td>
       </tr>
     </tbody>
   </table>
@@ -625,19 +625,62 @@ Plotly.newPlot('duration', [{
 }], {title: 'Service Duration (ms)', xaxis: {title: 'Duration (ms)'}, yaxis: {title: 'Count'}});
 
 /* Available-at-reject histogram: shows how many other targets had capacity when a request was rejected.
-   Ideal behavior: most rejections occur when availCounts == 0. This illustrates routing efficiency. */
-Plotly.newPlot('perTargetTotals', [{
-  x: availCounts, type: 'histogram', marker: {color: '#457b9d'}, nbinsx: 50
-}], {title: 'Available Targets at Reject (histogram)', xaxis: {title: '# other targets with available capacity'}, yaxis: {title: 'Count'}});
+   Render as a discrete bar chart so each integer count is shown as a labeled x tick. */
+(function() {
+  const arr = Array.isArray(availCounts) ? availCounts : [];
+  const minVal = arr.length ? Math.min(...arr) : 0;
+  const maxVal = arr.length ? Math.max(...arr) : 0;
+  // Include zero bucket explicitly
+  const start = Math.min(0, minVal);
+  const bins = [];
+  for (let v = start; v <= maxVal; v++) bins.push(v);
+  const counts = bins.map(b => arr.filter(x => x === b).length);
 
-/* Combined rates chart: retries/sec (bar), rejects/sec (bar), requests/sec (line) — all on the same Y axis */
+  Plotly.newPlot('perTargetTotals', [{
+    x: bins,
+    y: counts,
+    type: 'bar',
+    marker: {color: '#457b9d'}
+  }], { 
+    title: 'Available Targets at Reject (counts per available-targets)',
+    xaxis: { 
+      title: '# other targets with available capacity', 
+      tickmode: 'array', 
+      tickvals: bins, 
+      ticktext: bins.map(String)
+    }, 
+    yaxis: {title: 'Count'}
+  });
+})();
+
+/* Combined rates chart: retries/sec & rejects/sec plotted against a secondary (right) y-axis so they can use a different scale than requests/sec */
 Plotly.newPlot('ratesCombined', [{
-  x: retriesTimes, y: retriesRps, type: 'bar', name: 'retries/sec', marker: {color: '#e63946'}
+  x: retriesTimes,
+  y: retriesRps,
+  type: 'bar',
+  name: 'retries/sec',
+  marker: {color: '#e63946'},
+  yaxis: 'y2'
 }, {
-  x: rejects_times, y: rejects_rps, type: 'bar', name: 'rejects/sec', marker: {color: '#00FFFF'}
+  x: rejects_times,
+  y: rejects_rps,
+  type: 'bar',
+  name: 'rejects/sec',
+  marker: {color: '#00FFFF'},
+  yaxis: 'y2'
 }, {
-  x: rateTimes, y: rateRps, type: 'scatter', mode: 'lines', name: 'requests/sec', line: {color: '#1d3557'}
-}], {title: 'Rates Over Time', xaxis: {title: 't (ms)'}, yaxis: {title: 'count/sec'}});
+  x: rateTimes,
+  y: rateRps,
+  type: 'scatter',
+  mode: 'lines',
+  name: 'requests/sec',
+  line: {color: '#1d3557'}
+}], {
+  title: 'Rates Over Time',
+  xaxis: {title: 't (ms)'},
+  yaxis: {title: 'requests/sec', side: 'left'},
+  yaxis2: {title: 'retries & rejects (count/sec)', overlaying: 'y', side: 'right'}
+});
 
 /* Latency chart remains unchanged below */
 Plotly.newPlot('latencyOverTime', [

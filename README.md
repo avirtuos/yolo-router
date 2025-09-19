@@ -1,7 +1,7 @@
 # yolo-router
 
 A discrete-event simulation (SimPy) that was written entirely using spec driven development with OpenAI GPT5 + Cline in VSCode. For details on the design spec and prompts used
-see design.md.
+see design.md. The total cost for generating this simulation was $6.52 using a combination of combination of GPT-5 for planning and GPT-5-mini for acting.
 
 The simulation presents supports supports two load-balancing architectures and their scaling behaviors under configurable traffic:
 
