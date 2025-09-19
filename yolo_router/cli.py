@@ -1539,36 +1539,6 @@ table.table tbody tr:nth-child(even) {{ background-color: #fafafa; }}
 </div>
 
 <div class="section">
-  <h2>Retries Histogram</h2>
-  <div id="retries" class="chart"></div>
-</div>
-
-<div class="section">
-  <h2>Fleet Size Over Time</h2>
-  <div id="fleet" class="chart"></div>
-</div>
-
-<div class="section">
-  <h2>Free Slots Over Time</h2>
-  <div id="freeSlots" class="chart"></div>
-</div>
-
-<div class="section">
-  <h2>Latency Distribution (samples)</h2>
-  <div id="latency" class="chart"></div>
-</div>
-
-<div class="section">
-  <h2>Service Duration Distribution (samples)</h2>
-  <div id="duration" class="chart"></div>
-</div>
-
-<div class="section">
-  <h2>Per-Target Total Requests</h2>
-  <div id="perTargetTotals" class="chart"></div>
-</div>
-
-<div class="section">
   <h2>Rates Over Time</h2>
   <div id="ratesCombined" class="chart"></div>
 </div>
@@ -1579,8 +1549,38 @@ table.table tbody tr:nth-child(even) {{ background-color: #fafafa; }}
 </div>
 
 <div class="section">
-  <h2>Service Duration Over Time</h2>
+  <h2>Service Overhead Over Time</h2>
   <div id="serviceDurationOverTime" class="chart"></div>
+</div>
+
+<div class="section">
+  <h2>Free Slots Over Time</h2>
+  <div id="freeSlots" class="chart"></div>
+</div>
+
+<div class="section">
+  <h2>Available Targets at Reject</h2>
+  <div id="perTargetTotals" class="chart"></div>
+</div>
+
+<div class="section">
+  <h2>Retries Histogram</h2>
+  <div id="retries" class="chart"></div>
+</div>
+
+<div class="section">
+  <h2>Fleet Size Over Time</h2>
+  <div id="fleet" class="chart"></div>
+</div>
+
+<div class="section">
+  <h2>Latency Distribution (samples)</h2>
+  <div id="latency" class="chart"></div>
+</div>
+
+<div class="section">
+  <h2>Service Duration Distribution (samples)</h2>
+  <div id="duration" class="chart"></div>
 </div>
 
 {numeric_tables_html}

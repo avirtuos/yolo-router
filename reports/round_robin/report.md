@@ -2,7 +2,7 @@
 ## Run Summary
 | sim_time_ms | total_requests | scale_up_events | scale_down_events | scale_up_targets_added | scale_down_targets_removed | wall_runtime_seconds |
 | --- | --- | --- | --- | --- | --- | --- |
-| 440000 | 96698 | 10 | 0 | 10 | 0 | 3.253061294555664 |
+| 440000 | 96698 | 10 | 0 | 10 | 0 | 3.2927207946777344 |
 ## Retries Histogram
 | 0 | 1 | 2 | 3 |
 | --- | --- | --- | --- |
