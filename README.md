@@ -29,7 +29,18 @@ The "Service Overhead Over Time" graph shows how much latency is being added by 
  
 ## Quickstart
 
-1) Create a virtual environment and install dependencies:
+1) Create a virtual environment and install dependencies (recommended):
+
+Option A — automated (recommended):
+```
+./scripts/setup.sh --venv .venv --requirements requirements.txt
+```
+Notes:
+- To automatically install OS-level prerequisites (uses sudo), add `--install-prereqs`.
+- To force recreating the venv, add `--force`.
+- To use a specific Python executable, pass `--python /path/to/python`.
+
+Option B — manual:
 ```
 python3 -m venv .venv
 source .venv/bin/activate
@@ -267,6 +278,3 @@ Notes:
   - Check that the configured `reporting.output_dir` is writable
   - Ensure the simulation `duration_ms` is non-zero and traffic arrival rate is reasonable
 
-## License
-
-This repository is provided for simulation and experimentation per the included design brief. Ensure you comply with any applicable licenses for dependencies listed in `requirements.txt`.
